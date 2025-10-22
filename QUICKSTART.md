@@ -96,7 +96,7 @@ docker-compose up -d
 - **Client**: 172.20.0.4
 - **Firewall (internal)**: 172.20.0.2
 - **Firewall (external)**: 172.21.0.2
-- **Server**: 172.20.0.3
+- **Server**: 172.30.0.3 (protected subnet)
 - **Attacker**: 172.21.0.10 (external)
 
 ## Ports

@@ -7,8 +7,8 @@ services:
     container_name: server
     hostname: server
     networks:
-      internal_network:
-        ipv4_address: 172.20.0.3
+      server_network:
+        ipv4_address: 172.30.0.3
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=development
@@ -19,7 +19,7 @@ services:
     # Set firewall as default gateway
     command: >
       sh -c "ip route del default &&
-             ip route add default via 172.20.0.2 &&
+             ip route add default via 172.30.0.2 &&
              /app/start_server.sh"
     restart: unless-stopped
 
@@ -32,13 +32,16 @@ services:
     networks:
       internal_network:
         ipv4_address: 172.20.0.2
+      server_network:
+        ipv4_address: 172.30.0.2
       external_network:
         ipv4_address: 172.21.0.2
     environment:
       - FLASK_APP=dashboard.py
-      - SERVER_IP=172.20.0.3
+      - SERVER_IP=172.30.0.3
       - ADMIN_CLIENT_IP=172.20.0.5
       - INTERNAL_ATTACKER_IP=172.20.0.6
+      - SERVER_NETWORK=172.30.0.0/16
     ports:
       - "8080:8080"  # Dashboard
       - "5000:5000"  # Proxied server HTTP access
@@ -146,3 +149,11 @@ networks:
         - subnet: 172.21.0.0/16
     driver_opts:
       com.docker.network.bridge.name: br-external
+
+  server_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: br-server

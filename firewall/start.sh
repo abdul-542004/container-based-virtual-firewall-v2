@@ -1,15 +1,5 @@
 #!/bin/bash
 
-# Ensure logs and data directories have proper permissions
-mkdir -p /app/logs /app/data
-chmod 777 /app/logs /app/data
-
-# Create empty files if they don't exist
-touch /app/data/blocked_macs.txt 2>/dev/null || true
-touch /app/logs/requests.jsonl 2>/dev/null || true
-chmod 666 /app/data/blocked_macs.txt 2>/dev/null || true
-chmod 666 /app/logs/requests.jsonl 2>/dev/null || true
-
 # Start firewall rules in background
 echo "Starting firewall initialization..."
 /app/firewall.sh &
@@ -17,14 +7,22 @@ echo "Starting firewall initialization..."
 # Wait a moment for firewall to initialize
 sleep 2
 
-# Start DDoS monitoring and auto-blocking in background
-echo "Starting DDoS monitor..."
-/app/ddos_monitor.sh &
+# Start the dashboard first (provides in-memory storage API)
+echo "Starting dashboard..."
+python /app/dashboard.py &
 
-# Start the proxy server
+# Wait for dashboard to be ready
+sleep 3
+
+# Start the proxy server (sends logs to dashboard API)
 echo "Starting proxy server..."
 python /app/proxy.py &
 
-# Start the dashboard
-echo "Starting dashboard..."
-python /app/dashboard.py
+# Start iptables log monitor (captures blocked connections)
+echo "Starting iptables monitor..."
+/app/iptables_monitor.sh &
+
+# Start DDoS monitoring (reads from dashboard API)
+echo "Starting DDoS monitor..."
+/app/ddos_monitor.sh
+

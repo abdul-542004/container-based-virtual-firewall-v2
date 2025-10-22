@@ -5,65 +5,57 @@ from flask import Flask, render_template_string, request, jsonify
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import json
-import os
-import subprocess
+from collections import deque
+from threading import Lock
 
 app = Flask(__name__)
 CORS(app)
 
-# File paths
-LOGS_DIR = '/app/logs'
-DATA_DIR = '/app/data'
-REQUESTS_LOG = f'{LOGS_DIR}/requests.jsonl'
-BLOCKED_MACS_FILE = f'{DATA_DIR}/blocked_macs.txt'
+# In-memory data structures
+request_log = deque(maxlen=10000)  # Store last 10000 requests
+blocked_macs = set()  # Set of blocked MAC addresses
+data_lock = Lock()  # Thread safety for concurrent access
 
-# Ensure directories exist
-os.makedirs(LOGS_DIR, exist_ok=True)
-os.makedirs(DATA_DIR, exist_ok=True)
+def log_request(client_ip, method, path, status, blocked=False, reason=None):
+    """Log a request to in-memory storage"""
+    with data_lock:
+        entry = {
+            'timestamp': datetime.now().isoformat(),
+            'client_ip': client_ip,
+            'method': method,
+            'path': path,
+            'status': status,
+            'blocked': blocked
+        }
+        if reason:
+            entry['reason'] = reason
+        request_log.append(entry)
 
-# Initialize files if they don't exist
-if not os.path.exists(REQUESTS_LOG):
-    open(REQUESTS_LOG, 'a').close()
-if not os.path.exists(BLOCKED_MACS_FILE):
-    open(BLOCKED_MACS_FILE, 'a').close()
+def add_blocked_mac(mac_address):
+    """Add a MAC address to the blocked list"""
+    with data_lock:
+        blocked_macs.add(mac_address)
 
 def get_recent_requests(minutes=10):
-    """Get recent requests from log"""
-    if not os.path.exists(REQUESTS_LOG):
-        return []
-    
+    """Get recent requests from in-memory log"""
     cutoff_time = datetime.now() - timedelta(minutes=minutes)
     requests = []
     
-    try:
-        with open(REQUESTS_LOG, 'r') as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        req = json.loads(line)
-                        req_time = datetime.fromisoformat(req['timestamp'])
-                        if req_time >= cutoff_time:
-                            requests.append(req)
-                    except:
-                        continue
-    except:
-        pass
+    with data_lock:
+        for req in request_log:
+            try:
+                req_time = datetime.fromisoformat(req['timestamp'])
+                if req_time >= cutoff_time:
+                    requests.append(req)
+            except:
+                continue
     
     return sorted(requests, key=lambda x: x['timestamp'], reverse=True)
 
 def get_blocked_macs():
     """Get list of blocked MAC addresses"""
-    blocked_macs = []
-    try:
-        if os.path.exists(BLOCKED_MACS_FILE):
-            with open(BLOCKED_MACS_FILE, 'r') as f:
-                for line in f:
-                    mac = line.strip()
-                    if mac and not mac.startswith('#'):
-                        blocked_macs.append(mac)
-    except:
-        pass
-    return blocked_macs
+    with data_lock:
+        return list(blocked_macs)
 
 def get_statistics():
     """Get firewall statistics"""
@@ -87,10 +79,14 @@ def get_statistics():
             'ip': ip, 
             'count': count,
             'network': 'Internal (172.20.x.x)' if ip.startswith('172.20.') else 'External',
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'status': 'BLOCKING' if count > 20 else 'MONITORING'
         } 
-        for ip, count in ip_counts.items() if count > 20
+        for ip, count in ip_counts.items() if count > 15  # Show warning earlier
     ]
+    
+    # Get blocked request attempts (MAC blocked requests)
+    blocked_attempts = [r for r in get_recent_requests(10) if r.get('blocked', False) and r.get('status') == 403]
     
     # Top IPs by request count
     all_ips = {}
@@ -107,6 +103,7 @@ def get_statistics():
         'blocked_requests': blocked_requests,
         'allowed_requests': total_requests - blocked_requests,
         'ddos_alerts': ddos_alerts,
+        'blocked_attempts': len(blocked_attempts),
         'top_ips': top_ips
     }
 
@@ -352,19 +349,23 @@ DASHBOARD_HTML = """
 
         {% if stats.ddos_alerts %}
         <div class="alert danger">
-            <h3>⚠️ DDoS ATTACK DETECTED!</h3>
-            <p style="margin-bottom: 15px;">High traffic volume detected from the following sources:</p>
+            <h3>⚠️ DDoS ATTACK DETECTED - AUTO-BLOCKING IN PROGRESS!</h3>
+            <p style="margin-bottom: 15px;">High traffic detected - MAC addresses being blocked automatically:</p>
             {% for alert in stats.ddos_alerts %}
                 <div class="alert-item">
                     <div>
                         <strong>IP:</strong> <code>{{ alert.ip }}</code>
                         <span class="badge {{ 'internal' if alert.network == 'Internal (172.20.x.x)' else 'external' }}">{{ alert.network }}</span>
+                        <span class="badge {{ 'danger' if alert.status == 'BLOCKING' else 'warning' }}">{{ alert.status }}</span>
                     </div>
                     <div>
                         <strong style="color: #e74c3c; font-size: 18px;">{{ alert.count }} requests/min</strong>
                     </div>
                 </div>
             {% endfor %}
+            <p style="margin-top: 15px; font-size: 12px; opacity: 0.8;">
+                ℹ️ Monitor checks every 2 seconds and blocks MAC addresses exceeding 20 req/min threshold
+            </p>
         </div>
         {% endif %}
 
@@ -385,9 +386,9 @@ DASHBOARD_HTML = """
                 <div class="subtext">From other networks</div>
             </div>
             <div class="stat-card blocked">
-                <h3>Blocked/Failed</h3>
-                <div class="value">{{ stats.blocked_requests }}</div>
-                <div class="subtext">4xx/5xx responses</div>
+                <h3>Blocked Attempts</h3>
+                <div class="value">{{ stats.blocked_attempts }}</div>
+                <div class="subtext">MAC blocked (last 10 min)</div>
             </div>
         </div>
 
@@ -445,6 +446,7 @@ DASHBOARD_HTML = """
                                 <th>Method</th>
                                 <th>Path</th>
                                 <th>Status</th>
+                                <th>Details</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -471,10 +473,19 @@ DASHBOARD_HTML = """
                                             <span class="badge danger">{{ req.status }}</span>
                                         {% endif %}
                                     </td>
+                                    <td style="font-size: 12px; color: #95a5a6;">
+                                        {% if req.get('reason') %}
+                                            🚫 {{ req.reason }}
+                                        {% elif req.blocked %}
+                                            🚫 Blocked
+                                        {% else %}
+                                            ✓ Allowed
+                                        {% endif %}
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             {% else %}
-                                <tr><td colspan="6" class="empty-state">
+                                <tr><td colspan="7" class="empty-state">
                                     <div class="empty-state-icon">📭</div>
                                     <div>No traffic logged yet</div>
                                 </td></tr>
@@ -546,6 +557,41 @@ def api_logs():
     """API endpoint for recent logs"""
     minutes = request.args.get('minutes', 10, type=int)
     return jsonify(get_recent_requests(minutes))
+
+@app.route('/api/log', methods=['POST'])
+def api_log():
+    """API endpoint to receive log entries from proxy"""
+    try:
+        data = request.get_json()
+        log_request(
+            data['client_ip'],
+            data['method'],
+            data['path'],
+            data['status'],
+            data.get('blocked', False),
+            data.get('reason')
+        )
+        return jsonify({'status': 'ok'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/blocked_macs')
+def api_blocked_macs():
+    """API endpoint to get blocked MAC addresses"""
+    return jsonify({'blocked_macs': get_blocked_macs()})
+
+@app.route('/api/block_mac', methods=['POST'])
+def api_block_mac():
+    """API endpoint to block a MAC address"""
+    try:
+        data = request.get_json()
+        mac = data.get('mac')
+        if mac:
+            add_blocked_mac(mac)
+            return jsonify({'status': 'ok', 'mac': mac}), 200
+        return jsonify({'error': 'MAC address required'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 if __name__ == '__main__':
     print("=" * 50)

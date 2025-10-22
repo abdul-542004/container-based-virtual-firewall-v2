@@ -61,7 +61,7 @@ Two Docker bridge networks emulate internal and external segments. The firewall 
 │                                                             │
 │  ┌──────────┐      ┌───────────┐      ┌──────────┐          │
 │  │  Client  │ ───▶ │ Firewall  │ ───▶ │  Server  │          │
-│  │172.20.0.4│      │172.20.0.2 │      │172.20.0.3│          │
+│  │172.20.0.4│      │172.20.0.2 │      │172.30.0.3│          │
 │  └──────────┘      │ Dashboard │                           │
 │                    │ Port 8080 │                           │
 │                    └─────┬─────┘                           │
@@ -79,7 +79,7 @@ Two Docker bridge networks emulate internal and external segments. The firewall 
 
 - Internal network (bridge): 172.20.0.0/16
   - firewall: 172.20.0.2
-  - server:   172.20.0.3 (Flask app)
+  - server:   172.30.0.3 (Flask app, isolated subnet)
   - client:   172.20.0.4
 - External network (bridge): 172.21.0.0/16
   - firewall: 172.21.0.2

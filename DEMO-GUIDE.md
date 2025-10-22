@@ -35,12 +35,12 @@ docker exec attacker curl http://172.20.0.2:5000/
 
 **Admin Client (Allowed):**
 ```bash
-docker exec admin-client nc -zv 172.20.0.3 22
+docker exec admin-client nc -zv 172.30.0.3 22
 ```
 
 **Regular Client (Blocked):**
 ```bash
-docker exec client nc -zv 172.20.0.3 22
+docker exec client nc -zv 172.30.0.3 22
 # Should be rejected by firewall
 ```
 
@@ -176,7 +176,7 @@ docker-compose down
 │                         │                       │
 │                  ┌──────▼──────┐                │
 │                  │   Server    │                │
-│                  │ 172.20.0.3  │                │
+│                  │ 172.30.0.3  │                │
 │                  │             │                │
 │                  │ API Only    │                │
 │                  │ SSH (admin) │                │

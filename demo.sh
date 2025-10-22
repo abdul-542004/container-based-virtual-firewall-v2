@@ -98,7 +98,7 @@ print_info "Internal Attacker MAC: $(docker exec internal-attacker ip link show 
 
 echo ""
 echo "Testing SSH from ADMIN CLIENT (172.20.0.5)..."
-if docker exec admin-client timeout 3 nc -zv 172.20.0.3 22 2>&1 | grep -q "succeeded\|open"; then
+if docker exec admin-client timeout 3 nc -zv 172.30.0.3 22 2>&1 | grep -q "succeeded\|open"; then
     print_success "Admin client CAN reach SSH port on server"
 else
     print_info "Connection attempt from admin client (checking firewall rules...)"
@@ -106,7 +106,7 @@ fi
 
 echo ""
 echo "Testing SSH from REGULAR CLIENT (172.20.0.4)..."
-if docker exec client timeout 3 nc -zv 172.20.0.3 22 2>&1 | grep -q "succeeded\|open"; then
+if docker exec client timeout 3 nc -zv 172.30.0.3 22 2>&1 | grep -q "succeeded\|open"; then
     print_failure "Regular client CAN access SSH (SECURITY BREACH!)"
 else
     print_success "Regular client BLOCKED from SSH access (as expected)"
@@ -114,7 +114,7 @@ fi
 
 echo ""
 echo "Testing SSH from INTERNAL ATTACKER (172.20.0.6)..."
-if docker exec internal-attacker timeout 3 nc -zv 172.20.0.3 22 2>&1 | grep -q "succeeded\|open"; then
+if docker exec internal-attacker timeout 3 nc -zv 172.30.0.3 22 2>&1 | grep -q "succeeded\|open"; then
     print_failure "Internal attacker CAN access SSH (SECURITY BREACH!)"
 else
     print_success "Internal attacker BLOCKED from SSH access (as expected)"

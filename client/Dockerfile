@@ -3,6 +3,7 @@ FROM alpine:3.18
 # Install essential networking tools
 RUN apk add --no-cache \
     curl \
+    openssh-client \
     iputils \
     iproute2 \
     netcat-openbsd \

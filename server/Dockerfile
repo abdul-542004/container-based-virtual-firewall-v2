@@ -24,11 +24,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application files
 COPY . .
 
-# Create startup script
-RUN echo '#!/bin/bash' > /app/start_server.sh && \
-    echo 'service ssh start' >> /app/start_server.sh && \
-    echo 'python /app/app.py' >> /app/start_server.sh && \
-    chmod +x /app/start_server.sh
+# Copy startup script
+COPY start_server.sh /app/start_server.sh
+RUN chmod +x /app/start_server.sh
 
 # Expose ports
 EXPOSE 5000 22

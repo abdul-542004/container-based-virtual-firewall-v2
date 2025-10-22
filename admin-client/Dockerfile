@@ -21,7 +21,8 @@ RUN mkdir -p /usr/local/bin && \
     echo 'echo ""' >> /usr/local/bin/info && \
     echo 'echo "Available commands:"' >> /usr/local/bin/info && \
     echo 'echo "  curl http://firewall:5000/api/employees  - Access API via firewall"' >> /usr/local/bin/info && \
-    echo 'echo "  ssh -p 2222 root@firewall                - SSH to server via firewall"' >> /usr/local/bin/info && \
+    echo 'echo "  ssh root@server                          - SSH to server (password: firewall123)"' >> /usr/local/bin/info && \
+    echo 'echo "  ssh root@172.30.0.3                      - SSH to server by IP"' >> /usr/local/bin/info && \
     echo 'echo "  ping firewall                            - Test connectivity"' >> /usr/local/bin/info && \
     echo 'echo "  ip addr                                  - Show IP configuration"' >> /usr/local/bin/info && \
     echo 'echo ""' >> /usr/local/bin/info && \

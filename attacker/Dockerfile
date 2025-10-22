@@ -41,8 +41,8 @@ RUN echo '#!/bin/sh' > /usr/local/bin/info && \
     echo 'echo ""' >> /usr/local/bin/info && \
     echo 'echo "Available attack commands:"' >> /usr/local/bin/info && \
     echo 'echo "  ddos_attack http://firewall:5000/ 10 50    - DDoS simulation"' >> /usr/local/bin/info && \
-    echo 'echo "  port_scan 172.20.0.3                       - Port scan server"' >> /usr/local/bin/info && \
-    echo 'echo "  nmap -sS -p 5000 172.20.0.3                - SYN scan (alternative)"' >> /usr/local/bin/info && \
+    echo 'echo "  port_scan 172.30.0.3                       - Port scan server"' >> /usr/local/bin/info && \
+    echo 'echo "  nmap -sS -p 5000 172.30.0.3                - SYN scan (alternative)"' >> /usr/local/bin/info && \
     echo 'echo "  curl http://firewall:5000/                 - Normal request"' >> /usr/local/bin/info && \
     echo 'echo ""' >> /usr/local/bin/info && \
     echo 'echo "Network information:"' >> /usr/local/bin/info && \

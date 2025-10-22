@@ -1,29 +1,32 @@
 #!/bin/bash
 
 # DDoS Detection and MAC Blocking Script
-# Monitors request logs and automatically blocks MAC addresses of attackers
+# Monitors request logs via API and automatically blocks MAC addresses of attackers
 
 echo "=================================================="
 echo "DDoS Detection and MAC Blocking Service"
 echo "=================================================="
 
-REQUESTS_LOG="/app/logs/requests.jsonl"
-BLOCKED_MACS_FILE="/app/data/blocked_macs.txt"
-CHECK_INTERVAL=10  # Check every 10 seconds
+DASHBOARD_URL="http://localhost:8080"
+CHECK_INTERVAL=2   # Check every 2 seconds for faster response
 THRESHOLD=20       # Requests per minute threshold
-TIME_WINDOW=60     # Time window in seconds
-
-# Ensure files exist
-mkdir -p /app/logs /app/data
-touch "$REQUESTS_LOG" 2>/dev/null || true
-touch "$BLOCKED_MACS_FILE" 2>/dev/null || true
 
 echo "Configuration:"
+echo "  • Dashboard API: $DASHBOARD_URL"
 echo "  • Threshold: $THRESHOLD requests/minute"
 echo "  • Check Interval: ${CHECK_INTERVAL}s"
-echo "  • Time Window: ${TIME_WINDOW}s"
 echo "=================================================="
 echo ""
+
+# Wait for dashboard to be ready
+echo "Waiting for dashboard to start..."
+for i in {1..30}; do
+    if curl -s "$DASHBOARD_URL/api/stats" >/dev/null 2>&1; then
+        echo "✓ Dashboard is ready"
+        break
+    fi
+    sleep 1
+done
 
 # Function to get MAC address from IP
 get_mac_from_ip() {
@@ -42,7 +45,9 @@ get_mac_from_ip() {
 # Function to check if MAC is already blocked
 is_mac_blocked() {
     local mac=$1
-    grep -q "^$mac$" "$BLOCKED_MACS_FILE" 2>/dev/null
+    # Query dashboard API
+    blocked_macs=$(curl -s "$DASHBOARD_URL/api/blocked_macs" | grep -o '"'"$mac"'"' 2>/dev/null)
+    [ -n "$blocked_macs" ]
 }
 
 # Function to block MAC address
@@ -59,8 +64,10 @@ block_mac() {
         return
     fi
     
-    # Add to blocked MACs file
-    echo "$mac" >> "$BLOCKED_MACS_FILE"
+    # Add to blocked MACs via API
+    curl -s -X POST "$DASHBOARD_URL/api/block_mac" \
+        -H "Content-Type: application/json" \
+        -d "{\"mac\":\"$mac\"}" >/dev/null 2>&1
     echo "  → Added to blocked MACs: $mac"
     
     # Apply iptables rule immediately
@@ -77,54 +84,30 @@ echo "Starting DDoS monitoring..."
 echo ""
 
 while true; do
-    # Get current timestamp
-    current_time=$(date +%s)
-    cutoff_time=$((current_time - TIME_WINDOW))
+    # Get recent logs from last minute (not stats)
+    logs=$(curl -s "$DASHBOARD_URL/api/logs?minutes=1" 2>/dev/null)
     
-    # Process recent requests from log file
-    if [ -f "$REQUESTS_LOG" ] && [ -s "$REQUESTS_LOG" ]; then
-        # Extract IPs and their request counts in the time window
-        temp_file=$(mktemp)
+    if [ $? -eq 0 ] && [ -n "$logs" ]; then
+        # Count requests per IP from the logs
+        ip_counts=$(echo "$logs" | grep -o '"client_ip":"[^"]*"' | cut -d'"' -f4 | sort | uniq -c | sort -rn)
         
-        # Parse JSON log and count requests per IP
-        while IFS= read -r line; do
-            # Extract timestamp and IP from JSON
-            timestamp=$(echo "$line" | grep -o '"timestamp":"[^"]*"' | cut -d'"' -f4)
-            client_ip=$(echo "$line" | grep -o '"client_ip":"[^"]*"' | cut -d'"' -f4)
-            
-            # Convert timestamp to epoch
-            if [ -n "$timestamp" ] && [ -n "$client_ip" ]; then
-                req_time=$(date -d "$timestamp" +%s 2>/dev/null || echo 0)
-                
-                # Check if within time window
-                if [ "$req_time" -ge "$cutoff_time" ]; then
-                    echo "$client_ip"
-                fi
-            fi
-        done < "$REQUESTS_LOG" | sort | uniq -c | sort -rn > "$temp_file"
-        
-        # Check each IP for threshold violation
+        # Check each IP
         while read -r count ip; do
-            # Skip if empty
-            [ -z "$ip" ] && continue
+            # Skip if empty or invalid
+            [ -z "$ip" ] || [ -z "$count" ] && continue
             
-            # Check if count exceeds threshold
-            if [ "$count" -ge "$THRESHOLD" ]; then
-                # Only block internal network IPs (potential internal attackers)
-                if [[ "$ip" =~ ^172\.20\. ]]; then
-                    # Get MAC address
-                    mac=$(get_mac_from_ip "$ip")
-                    
-                    if [ -n "$mac" ] && [ "$mac" != "<incomplete>" ]; then
-                        block_mac "$ip" "$mac" "$count"
-                    else
-                        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cannot get MAC for $ip (${count} req/min)"
-                    fi
+            # Only check internal network IPs (potential internal attackers)
+            if [[ "$ip" =~ ^172\.20\. ]] && [ "$count" -gt "$THRESHOLD" ]; then
+                # Get MAC address
+                mac=$(get_mac_from_ip "$ip")
+                
+                if [ -n "$mac" ] && [ "$mac" != "<incomplete>" ]; then
+                    block_mac "$ip" "$mac" "$count"
+                else
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cannot get MAC for $ip (${count} req/min)"
                 fi
             fi
-        done < "$temp_file"
-        
-        rm -f "$temp_file"
+        done <<< "$ip_counts"
     fi
     
     # Wait before next check
