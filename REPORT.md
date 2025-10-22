@@ -1,189 +1,159 @@
-# Container Based Virtual Firewall
+# Academic Report: Container-Based Virtual Firewall Lab
 
-## INTRODUCTION
+## 1. Introduction
 
-A firewall is a security control that monitors and filters network traffic based on a defined policy. Operating primarily at layers 3–4 (and sometimes higher), it evaluates packet attributes (IP, port, protocol, connection state) and decides whether to allow, reject, or drop traffic.
+Firewalls are network security systems that monitor and control traffic based on predetermined security policies. Traditional firewalls operate at network and transport layers (L3/L4) using technologies such as packet filtering, stateful inspection, and NAT. Modern environments also employ application-aware controls (L7) to add visibility and policy context.
 
-A virtual firewall is a software-based firewall that runs on virtualized infrastructure rather than a dedicated hardware appliance. It provides comparable packet filtering and stateful inspection capabilities with improved flexibility, automation, and cost efficiency.
+A virtual firewall is a software-based firewall that runs on general-purpose compute instead of dedicated hardware. It can be deployed as a virtual machine, process, or container, providing flexible placement and elastic scaling.
 
-A container-based virtual firewall packages the firewall logic and its management plane inside a container. It leverages Linux network namespaces and iptables/conntrack for dataplane control, and can expose a lightweight dashboard/API for runtime rule management. In this project, the firewall container sits between an internal client and an internal server, mediating traffic and enforcing:
-- IP and MAC address filtering
-- Port-based access control
-- DDoS protections (rate limiting, SYN flood mitigation, concurrent connection limits, ICMP throttling)
-- Real-time monitoring via a dashboard
+This lab implements a container-based virtual firewall placed between an internal network and a protected server. The firewall acts as the default gateway for all clients and the server, enforcing policy via Linux iptables and providing a live dashboard. The server is not directly exposed to the host or external networks; all access traverses the firewall.
 
-This approach demonstrates a modern, reproducible, and portable security control that’s easy to spin up, test, and extend.
 
-## LITERATURE REVIEW
+## 2. Literature Review
 
-Before containerized approaches became common, several strategies were typically used to deploy firewalls in lab and production environments:
+Prior to containerized approaches, common strategies included:
 
-1) Hardware Network Firewalls (Perimeter Appliances)
-- Dedicated appliances at the network edge (e.g., between corporate LAN and the Internet).
-- Strengths: high throughput, vendor support, specialized ASICs, mature features.
-- Drawbacks: expensive, slower to provision/change, limited environment parity for dev/test, coarse-grained segmentation, difficult to replicate at scale for experiments.
+- Hardware appliances: Purpose-built firewall devices offering high throughput and mature features. Drawbacks include cost, physical placement constraints, coarse multi-tenancy, and slower change cycles.
+- Host-based firewalls: Local OS firewalls (e.g., Windows Firewall, iptables/ufw on Linux) applied per host. While flexible, they can be inconsistent across fleets, harder to centrally monitor, and don’t naturally segment networks.
+- Virtual-machine-based firewalls: Software firewalls packaged as VMs. These improve flexibility over hardware but tend to be heavier in resource consumption, slower to spin up, and less granular for micro-segmentation.
+- SDN/NFV and cloud-native security groups: Network overlays and policy constructs (e.g., AWS Security Groups) that filter traffic in virtualized fabrics. Powerful at scale, but can be provider-specific and abstracted away from kernel-level behavior.
 
-2) Host-Based Firewalls on Bare Metal/VMs
-- OS-native controls like Linux iptables/nftables or Windows Firewall, configured per host.
-- Strengths: zero extra hardware, close to workload, flexible.
-- Drawbacks: configuration drift across many hosts, limited centralized visibility, harder to orchestrate consistently, environment coupling to host lifecycle.
+Container-based virtual firewalls bring several advantages:
 
-3) VM-Based Virtual Appliances
-- Full virtual machines running firewall distributions (e.g., pfSense/OPNsense) or vendor virtual editions.
-- Strengths: close to hardware firewall feature parity, familiar operational model, fits virtualized datacenters.
-- Drawbacks: heavy (full OS per instance), slower boot and scale operations, higher resource overhead, more complex image management compared to containers.
+- Lightweight deployment and fast iteration, aligned with container lifecycle
+- Easy multi-network attachment for east–west and north–south control
+- Fine-grained, code-defined policies with reproducible builds
+- Composability with additional services (proxy, telemetry, dashboards)
 
-4) SDN/NFV and Microsegmentation (Pre-Container Era to Cloud-Native)
-- Network function virtualization moved firewalling into software overlays; SDN enabled central policy control; microsegmentation restricted east–west traffic.
-- Strengths: policy-driven, programmable, scalable.
-- Drawbacks: complex control planes, heavier platforms to deploy/operate; not trivial for small labs or lightweight demos.
+Limitations to consider:
 
-Why a container-based firewall for labs and demos?
-- Lightweight and fast: seconds to build/start; easy to tear down.
-- Reproducible: Dockerfiles and Compose capture the entire environment.
-- Isolated yet realistic: distinct network namespaces and bridge networks emulate multi-subnet topologies.
-- Easy iteration: change code/policy, rebuild, and observe impact immediately.
+- Persistence of state: in-memory telemetry can be ephemeral without external storage
+- Performance ceilings compared to specialized hardware at very high throughputs
+- Operational complexity if policy is split across layers (L3–L7) without clear ownership
 
-Trade-offs in container-based designs
-- Not a replacement for enterprise-grade perimeter devices in high-throughput networks.
-- Requires careful capability management (NET_ADMIN/NET_RAW) and privilege scoping.
-- By default, focuses on L3/L4; application-layer protections would require additional proxies/IDS/IPS components.
 
-## EXPERIMENTAL SETUP
+## 3. Experimental Setup
 
-### Architecture Overview
+### 3.1 Objectives
 
-Two Docker bridge networks emulate internal and external segments. The firewall container is dual-homed and forwards/filters traffic between them and to the protected server.
+Demonstrate a firewall that:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Internal Network (172.20.0.0/16)         │
-│                                                             │
-│  ┌──────────┐      ┌───────────┐      ┌──────────┐          │
-│  │  Client  │ ───▶ │ Firewall  │ ───▶ │  Server  │          │
-│  │172.20.0.4│      │172.20.0.2 │      │172.30.0.3│          │
-│  └──────────┘      │ Dashboard │                           │
-│                    │ Port 8080 │                           │
-│                    └─────┬─────┘                           │
-│                          │                                 │
-│                    ┌─────▼─────┐                           │
-│                    │ Attacker  │  (external testing only)  │
-│                    └───────────┘                           │
-└─────────────────────────────────────────────────────────────┘
-                             │
-┌────────────────────────────▼───────────────────────────────┐
-│               External Network (172.21.0.0/16)             │
-│                      Attacker: 172.21.0.10                 │
-└────────────────────────────────────────────────────────────┘
-```
+- Allows only internal network clients to access a REST API on the server
+- Restricts SSH access to the server to the admin client only
+- Detects and mitigates an internal DDoS attempt by blocking the attacker’s MAC
+- Blocks all traffic originating from the external network
 
-- Internal network (bridge): 172.20.0.0/16
-  - firewall: 172.20.0.2
-  - server:   172.30.0.3 (Flask app, isolated subnet)
-  - client:   172.20.0.4
-- External network (bridge): 172.21.0.0/16
-  - firewall: 172.21.0.2
-  - attacker: 172.21.0.10
+### 3.2 Topology
 
-Exposed host ports
-- 8080 → Firewall dashboard (http://localhost:8080)
-- 5000 → Proxied server access via firewall (http://localhost:5000)
-- 5001 → Direct server access (bypasses firewall) for comparison (http://localhost:5001)
+Three Docker bridge networks are used:
 
-### Components and Roles
+- Internal: 172.20.0.0/16 (client, admin-client, internal-attacker)
+- Server:   172.30.0.0/16 (server)
+- External: 172.21.0.0/16 (attacker)
 
-- Firewall container
-  - Dataplane: Linux iptables/conntrack for packet filtering, forwarding, and basic DDoS protection.
-  - Control plane: Python/Flask dashboard (`dashboard.py`) and proxy (`proxy.py`) for rule management and traffic mediation.
-  - Bootstraps rules via `firewall.sh`; supports periodic reload when a marker file exists.
-  - Packages helpful tooling: tcpdump, iproute2, conntrack-tools.
+The firewall container connects to all three and is the default gateway for both the internal clients and the server. The host exposes only the firewall’s dashboard (8080), proxied API (5000), and firewall SSH (host:2222 → firewall:22). The server exposes no host ports.
 
-- Server container
-  - Flask Employee Management System API/UI (`server/app.py`).
-  - Exposed directly on host port 5001 (bypass) and indirectly via the firewall on 5000.
+### 3.3 Tools and components
 
-- Client container
-  - Internal trusted client for legitimate traffic tests.
+- Docker and docker-compose for orchestration
+- Linux iptables for packet filtering and NAT
+- Flask for the API server (`server/app.py`) and the firewall dashboard (`firewall/dashboard.py`)
+- A lightweight HTTP proxy (`firewall/proxy.py`) for logging and simple L7 control
+- Shell scripts for initialization and monitoring:
+	- `firewall/firewall.sh` (iptables policy)
+	- `firewall/ddos_monitor.sh` (request-rate analysis and MAC blocking)
+	- `firewall/iptables_monitor.sh` (counter-based event reporting)
+	- `firewall/start.sh` (service orchestration)
+- Minimal client images for internal, admin, and attacker roles
 
-- Attacker container
-  - External host to simulate adversarial behavior (e.g., floods, high-rate requests).
+### 3.4 Server application
 
-### Tools and Technologies
+The server implements a RESTful Employee Management API with CRUD endpoints. It also runs an SSH daemon for the access-control demonstration. The server’s default route points to the firewall on the server subnet, ensuring return traffic traverses the firewall.
 
-- Container/runtime: Docker Engine with Docker Compose.
-- Language/runtime: Python 3.11 (slim base image for firewall; Flask apps for dashboard/server).
-- Networking: Linux bridges, namespaces, iptables, conntrack.
-- Diagnostics: tcpdump, iputils-ping, net-tools, curl.
-- Optional attack tooling examples: `hping3` for SYN floods (root required), simple request floods via provided scripts/loops.
 
-### Firewall Policy Summary (from `firewall/firewall.sh`)
+## 4. Methodology and Implementation
 
-- Baseline
-  - IP forwarding enabled; default policy: DROP on FORWARD, ACCEPT on INPUT/OUTPUT.
-  - Allow loopback and established/related traffic.
+### 4.1 Gateway enforcement and NAT
 
-- Address filtering
-  - Blocklist: `/app/data/blocked_ips.txt` → DROP in INPUT and FORWARD.
-  - Allowlist: `/app/data/allowed_ips.txt` → ACCEPT in FORWARD (use to bypass general constraints for trusted IPs).
-  - MAC blocklist: `/app/data/blocked_macs.txt` → DROP frames from listed MACs (INPUT, FORWARD).
+The firewall enables IP forwarding and programs iptables policies:
 
-- Port filtering
-  - SSH (22): DROP by default.
-  - HTTP (80) and HTTPS (443): ACCEPT.
-  - Application port (5000): ACCEPT (proxied Flask app).
+- INPUT/OUTPUT/FORWARD default policies with explicit allows and drops
+- FORWARD policies to allow internal traffic and drop external sources
+- Port filtering: allow server:22 only from admin-client’s IP; reject others
+- DNAT rules: firewall:5000 → server:5000, firewall:22 → server:22
+- MASQUERADE rules for internal/server egress as needed
 
-- DDoS protections
-  - Per-source connection rate limit: max ~20 new TCP connections/minute using `-m recent`.
-  - SYN flood throttling: allow ~10/s with burst 20; excess SYNs dropped.
-  - Concurrent connection cap: `--dport 5000` above 10 concurrent connections per IP → DROP.
-  - ICMP echo-request: 1 per second; excess dropped.
-  - Logging for dropped packets with rate limits to avoid log floods.
+This design forces all flows through the firewall for both directions (client→server and server→client), enabling consistent policy enforcement.
 
-- Rule reload
-  - If `/app/data/reload_rules` exists, the script re-execs to reapply state (dashboard can trigger this by creating the marker file).
+### 4.2 DDoS detection and MAC blocking
 
-### Data and State
+Two mechanisms cooperate:
 
-- Rule lists (mounted as volumes under the firewall container)
-  - `firewall/data/blocked_ips.txt`
-  - `firewall/data/allowed_ips.txt`
-  - `firewall/data/blocked_macs.txt`
+- iptables limits at L3/L4: connection rate limits, SYN flood limits, concurrent connection caps, and ICMP rate limits
+- Application-driven analytics at L7: `proxy.py` logs requests to the dashboard; `ddos_monitor.sh` evaluates recent request rates via the dashboard API. If a source exceeds thresholds, the script resolves the MAC (via ARP), inserts `BLOCKED_MACS` rules (LOG + DROP), and records the MAC in the dashboard’s in-memory set. The proxy consults this set to deny further L7 requests from the MAC as well.
 
-- Logs
-  - `firewall/logs/requests.jsonl` for application-layer request logs.
-  - System logs for iptables drops (view via `docker logs firewall`).
+### 4.3 Telemetry and dashboard
 
-### Demonstration Flow (Reproducible Experiment)
+The dashboard maintains an in-memory ring buffer of recent requests and a set of blocked MACs. It exposes simple JSON endpoints for stats, logs, and blocked MACs, and renders a live HTML dashboard for visualization and demonstration.
 
-1) Build and start
-   - `docker-compose build` then `docker-compose up -d`.
-   - Verify services: `docker-compose ps`, `docker logs firewall`, `docker logs server`.
 
-2) Access points
-   - Dashboard: http://localhost:8080
-   - Server via firewall: http://localhost:5000
-   - Server direct (bypass): http://localhost:5001
+## 5. Demonstration Scenarios (Results)
 
-3) Experiments
-   - IP filtering: add attacker’s IP (172.21.0.10 is external; for internal tests use 172.20.0.x) to blocklist and validate connection denial.
-   - MAC filtering: add attacker/container MAC to blocklist; verify traffic is dropped.
-   - Port control: confirm SSH (22) blocked; HTTP/HTTPS allowed; custom ports denied by default.
-   - DDoS scenarios:
-     - High-rate requests: allow initial requests then observe rate-limit drops and alerts.
-     - SYN flood: excess SYNs dropped while legitimate flows continue.
-     - Concurrent connection limits: attempts above 10 active conns/IP to port 5000 are rejected.
+1) IP filtering
+- Internal client successfully queries `GET /api/employees` via the firewall proxy.
+- External attacker cannot reach the proxied API at firewall:5000; drops are visible in counters.
 
-4) Observability
-   - Dashboard shows live traffic, rule state, and alerts.
-   - Packet captures via tcpdump on the firewall container when deeper inspection is needed.
+2) Port filtering (SSH)
+- `admin-client` can connect to server:22 (validated via netcat or SSH test).
+- Regular `client` and `internal-attacker` cannot reach server:22; attempts are logged as blocked.
 
-### Environment Summary (from `docker-compose.yml`)
+3) Normal API operations
+- Internal clients can list, create, update, and delete employees through the firewall; telemetry appears on the dashboard.
 
-- Services: server, firewall, client, attacker.
-- Networks: `internal_network` (172.20.0.0/16), `external_network` (172.21.0.0/16) with custom bridge names.
-- Capabilities: firewall runs privileged and with NET_ADMIN/NET_RAW to program iptables and inspect traffic.
-- Images built locally from `Dockerfile`s; Python dependencies pinned (Flask, flask-cors, requests on firewall; Flask, flask-cors on server).
+4) DDoS detection and mitigation
+- The internal attacker launches a burst of requests (e.g., 10 threads × 100 requests).
+- The dashboard shows an elevated rate and DDoS alerts; `ddos_monitor.sh` auto-inserts MAC-based drop rules.
+- Subsequent requests from the attacker’s MAC are denied at both iptables (L2 match) and proxy (L7 consult) layers.
 
----
+Empirical observation in the lab confirms the intended behavior across these scenarios.
 
-This report summarizes the rationale, prior approaches, and the complete experimental configuration for a container-based virtual firewall lab. It can be extended with evaluation results (throughput under attack, latency impact, rule update latency) and a references section if you plan to turn it into a formal paper.
+
+## 6. Discussion
+
+This container-based approach demonstrates that a practical, enforceable security perimeter can be created entirely within a Docker topology:
+
+- By making the firewall the default gateway, policy becomes unavoidable for data paths.
+- iptables remains a powerful, transparent enforcement engine for L3/L4 concerns.
+- Light L7 assist (proxy + dashboard) adds visibility and enables rapid heuristics for DDoS-like behavior without replacing kernel enforcement.
+
+Tradeoffs include the ephemeral nature of dashboard state and limits to absolute performance. In production, persistent logging, external metrics, and configuration management would complement this design.
+
+
+## 7. Limitations
+
+- Dashboard and block lists are in-memory; they reset on firewall restart.
+- The DDoS detector uses basic thresholds and naive ARP-based MAC resolution (sufficient in a single L2 domain but not robust across routed domains).
+- No TLS termination is included in this lab for simplicity.
+- Static addressing is used for clarity; dynamic environments would require service discovery or automation.
+
+
+## 8. Future Work
+
+- Persist telemetry and blocked indicators (e.g., to a database or SIEM)
+- Add authenticated, auditable admin endpoints for policy changes and unblocking
+- Integrate metrics exporters (Prometheus) and dashboards (Grafana)
+- Add TLS termination and mTLS for intra-network services
+- Explore eBPF/XDP for higher-performance filtering where appropriate
+
+
+## 9. Conclusion
+
+The lab demonstrates an end-to-end containerized firewall that enforces core network and port policies, mitigates basic DDoS behavior, and provides live visibility—all without exposing the protected server directly to the host. It highlights how container-native constructs, combined with kernel-level controls, can deliver an effective and teachable security architecture.
+
+
+## References
+
+1) Cheswick, Bellovin, and Rubin. Firewalls and Internet Security (classic concepts).
+2) Linux iptables documentation (Netfilter project).
+3) Docker networking documentation (bridge networks and multi-network containers).
+4) OWASP Cheat Sheets (rate limiting and denial-of-service considerations).
