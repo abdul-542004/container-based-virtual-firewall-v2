@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  # Server Container - Employee Management API
+  server:
+    build: ./server
+    container_name: server
+    hostname: server
+    networks:
+      internal_network:
+        ipv4_address: 172.20.0.3
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=development
+    # No port mapping - only accessible via firewall
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Set firewall as default gateway
+    command: >
+      sh -c "ip route del default &&
+             ip route add default via 172.20.0.2 &&
+             /app/start_server.sh"
+    restart: unless-stopped
+
+  # Firewall Container - Gateway between clients and server
+  firewall:
+    build: ./firewall
+    container_name: firewall
+    hostname: firewall
+    privileged: true
+    networks:
+      internal_network:
+        ipv4_address: 172.20.0.2
+      external_network:
+        ipv4_address: 172.21.0.2
+    environment:
+      - FLASK_APP=dashboard.py
+      - SERVER_IP=172.20.0.3
+      - ADMIN_CLIENT_IP=172.20.0.5
+      - INTERNAL_ATTACKER_IP=172.20.0.6
+    ports:
+      - "8080:8080"  # Dashboard
+      - "5000:5000"  # Proxied server HTTP access
+      - "2222:22"    # SSH access through firewall
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    volumes:
+      - ./firewall/logs:/app/logs
+      - ./firewall/data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - server
+
+  # Regular Client Container - Internal network client
+  client:
+    build: ./client
+    container_name: client
+    hostname: client
+    networks:
+      internal_network:
+        ipv4_address: 172.20.0.4
+    cap_add:
+      - NET_ADMIN
+    # Route traffic through firewall
+    command: >
+      sh -c "ip route del default &&
+             ip route add default via 172.20.0.2 &&
+             /usr/local/bin/info && tail -f /dev/null"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    depends_on:
+      - firewall
+
+  # Admin Client Container - Has SSH privileges
+  admin-client:
+    build: ./admin-client
+    container_name: admin-client
+    hostname: admin-client
+    networks:
+      internal_network:
+        ipv4_address: 172.20.0.5
+    cap_add:
+      - NET_ADMIN
+    # Route traffic through firewall
+    command: >
+      sh -c "ip route del default &&
+             ip route add default via 172.20.0.2 &&
+             /usr/local/bin/info && tail -f /dev/null"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    depends_on:
+      - firewall
+
+  # Internal Attacker Container - Can DDoS from inside network
+  internal-attacker:
+    build: ./internal-attacker
+    container_name: internal-attacker
+    hostname: internal-attacker
+    networks:
+      internal_network:
+        ipv4_address: 172.20.0.6
+    cap_add:
+      - NET_ADMIN
+    # Route traffic through firewall
+    command: >
+      sh -c "ip route del default &&
+             ip route add default via 172.20.0.2 &&
+             /usr/local/bin/info && tail -f /dev/null"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    depends_on:
+      - firewall
+
+  # External Attacker Container - Blocked by default
+  attacker:
+    build: ./attacker
+    container_name: attacker
+    hostname: attacker
+    networks:
+      external_network:
+        ipv4_address: 172.21.0.10
+    cap_add:
+      - NET_ADMIN
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+networks:
+  internal_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: br-internal
+  
+  external_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16
+    driver_opts:
+      com.docker.network.bridge.name: br-external

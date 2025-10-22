@@ -1,0 +1,27 @@
+Before proceeding, understand this project thoroughly. I want to make some changes in it.
+
+
+First, dont expose the server to outside world through PORT mapping, it destroys the purpose of having firewall.
+
+Server should only be accessed via the firewall. So simplify the server interface to just have RESTFULL APIs of CRUD instead of full fledge GUI since I cant access that GUI on Clients.
+
+You can expose the firewall (port mapping) so that I can demonstrate it to my teacher.
+
+For internal clients, I want two more client:
+admin client (can SSH the server, no one else can SSH)
+internal attacker client (have the ability to DDoS server)
+
+Now, for the firewall, I dont want functionality like allowing disallowing IP addresses and MAC addresses on the go. Following rules should be employed:
+- Allow all client that are in the same network as the server. Block all clients that are not on the same network. (IP FILTERING)
+- Allow SSH from admin client only. The other client cant SSH. (PORT FILTERING)
+- Firewall should prevent DDoS attack from the internal attacker client. (DDoS PROTECTION)
+- internal attacker client should be allowed first as it sits in the same network as the server, but as soon as that attacker tries to DDoS the server, the firewall would ban that MAC address.(MAC FILTERING)
+
+Make sure you define the DDoS attack script in internal attacker which i can execute from its terminal on runtime. (use shell scripting)
+
+Make sure no client in the internal network can access the server directly, all the communication should be through the firewall.
+I think you should make the gateway of server to be firewall's IP and then apply NAT/forwarding in firewall, idk you should apply what is needed.
+
+I want most of the filtering through iptables and not in python logic.
+
+I want client/attacker containers to be minimal and lightweight.
